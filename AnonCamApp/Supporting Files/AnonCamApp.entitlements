@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Camera access -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+
+	<!-- Microphone access (if adding audio later) -->
+	<key>com.apple.security.device.microphone</key>
+	<false/>
+
+	<!-- App Sandbox -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- Network access (for downloading MediaPipe assets if needed) -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!-- JIT entitlement for debugging Metal shaders -->
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+
+	<!-- Allow loading system extensions -->
+	<key>com.apple.security.system-extension-install</key>
+	<true/>
+
+	<!-- Shared memory for IPC -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>com.anoncam.app-group</string>
+	</array>
+
+	<!-- IOSurface sharing -->
+	<key>com.apple.security.iosurface</key>
+	<true/>
+</dict>
+</plist>

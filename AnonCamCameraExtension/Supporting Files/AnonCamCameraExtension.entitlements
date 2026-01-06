@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- System Extension -->
+	<key>com.apple.security.system-extension-install</key>
+	<true/>
+
+	<!-- App Sandbox (required for extensions) -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- Remove the app-sandbox exemption for system extensions -->
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+
+	<!-- Shared memory for IPC with main app -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>com.anoncam.app-group</string>
+	</array>
+
+	<!-- IOSurface sharing -->
+	<key>com.apple.security.iosurface</key>
+	<true/>
+
+	<!-- Camera extension specific entitlement -->
+	<key>com.apple.security.temporary-exception.mach-lookup-global-name</key>
+	<array>
+		<string>com.apple.CoreMediaIO.ExtensionSystemExtensionHost</string>
+	</array>
+
+	<!-- System extension class -->
+	<key>com.apple.system-extension-policy</key>
+	<dict>
+		<key>SystemExtensionTypes</key>
+		<dict>
+			<key>com.apple.cmio.SystemExtension</key>
+			<string>com.anoncam.extension</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

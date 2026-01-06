@@ -1,0 +1,34 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+		project = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 1 /* Build configuration list for PBXProject "AnonCam" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 2;
+			productRefGroup = 3;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4 /* AnonCamApp */,
+				5 /* AnonCamCameraExtension */,
+			);
+		};
+	};
+	rootObject = project /* Project object */;
+}

@@ -337,11 +337,17 @@ final class MetalRenderer: @unchecked Sendable {
                 baseColor = mix(baseColor, texColor.rgb, texColor.a);
             }
             
-            float3 litColor = baseColor * (0.4 + 0.4 * NdotL1 + 0.2 * NdotL2);
-            litColor += rim * 0.15 * float3(1.0, 1.0, 1.0);
-            float pattern = sin(in.worldPos.x * 20.0 + uniforms.time) *
-                            cos(in.worldPos.y * 20.0 + uniforms.time * 0.7);
-            litColor += pattern * 0.02;
+            float3 litColor;
+            if (uniforms.isStickerMode == 1) {
+                litColor = baseColor; // No shading for stickers
+            } else {
+                float3 litColorShaded = baseColor * (0.4 + 0.4 * NdotL1 + 0.2 * NdotL2);
+                litColorShaded += rim * 0.15 * float3(1.0, 1.0, 1.0);
+                float pattern = sin(in.worldPos.x * 20.0 + uniforms.time) *
+                                cos(in.worldPos.y * 20.0 + uniforms.time * 0.7);
+                litColorShaded += pattern * 0.02;
+                litColor = litColorShaded;
+            }
             float alpha = uniforms.baseColor.a;
             return float4(litColor, alpha);
         }
@@ -506,12 +512,21 @@ final class MetalRenderer: @unchecked Sendable {
 
     private func updateMaskGeometry() {
         var maskVertices: [MaskVertexData] = []
-        for vertex in maskGeometry.vertices {
-            let normal = normalize(vertex)
+        for i in 0..<maskGeometry.vertices.count {
+            let vertex = maskGeometry.vertices[i]
+            let uv = i < maskGeometry.uvs.count ? maskGeometry.uvs[i] : SIMD2<Float>(0, 0)
+            
+            // For sticker mode or flat masks, we want a forward-facing normal
+            // For 3D masks, we use the vertex position as a proxy for the sphere-like normal
+            var normal = normalize(vertex)
+            if normal.x.isNaN || normal.y.isNaN || normal.z.isNaN || length(vertex) < 0.0001 {
+                normal = SIMD3<Float>(0, 0, 1)
+            }
+            
             maskVertices.append(MaskVertexData(
                 position: vertex,
                 normal: normal,
-                texCoord: SIMD2<Float>(0, 0)
+                texCoord: uv
             ))
         }
 

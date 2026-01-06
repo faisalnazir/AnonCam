@@ -36,6 +36,7 @@ final class AppViewModel: ObservableObject {
     private nonisolated(unsafe) var faceTracker: VisionFaceTracker?
     private nonisolated(unsafe) var metalRenderer: MetalRenderer?
     private nonisolated(unsafe) var frameExporter: FrameExporter?
+    private nonisolated(unsafe) var faceMeshMapper: FaceMeshMapper?
 
     // Concurrency & Throttling
     private let processingQueue = DispatchQueue(label: "com.anoncam.processing", qos: .userInteractive)
@@ -73,9 +74,10 @@ final class AppViewModel: ObservableObject {
                 
                 // Configure Renderer based on style
                 self.metalRenderer?.isPixelationEnabled = (newStyle == .pixelate)
-                self.metalRenderer?.is3DMaskEnabled = (newStyle == .helmet || newStyle == .organic || newStyle == .lowPoly || newStyle == .circle || newStyle == .sticker)
-                self.metalRenderer?.isStickerMode = (newStyle == .sticker)
+                self.metalRenderer?.is3DMaskEnabled = (newStyle == .helmet || newStyle == .organic || newStyle == .lowPoly || newStyle == .circle || newStyle == .sticker || newStyle == .faceMesh)
+                self.metalRenderer?.isStickerMode = (newStyle == .sticker || newStyle == .faceMesh)
                 self.metalRenderer?.isDebugEnabled = (newStyle == .debug)
+                self.metalRenderer?.useFaceMeshMapping = (newStyle == .faceMesh)
                 
                 // Only update geometry if using a 3D mask
                 if newStyle != .pixelate && newStyle != .none && newStyle != .debug {
@@ -92,6 +94,7 @@ final class AppViewModel: ObservableObject {
         case lowPoly = "Low Poly"
         case circle = "Circle"
         case sticker = "Sticker"
+        case faceMesh = "Face Mesh"
         case debug = "Debug"
         case none = "None"
 
@@ -102,6 +105,7 @@ final class AppViewModel: ObservableObject {
             case .lowPoly: return .lowPolyMask()
             case .circle: return .circleMask()
             case .sticker: return .stickerMask()
+            case .faceMesh: return .stickerMask() // Will be updated dynamically
             default: return .helmetMask()
             }
         }
@@ -147,6 +151,7 @@ final class AppViewModel: ObservableObject {
         cameraCapture = CameraCapture()
         faceTracker = VisionFaceTracker()
         metalRenderer = MetalRenderer(device: device)
+        faceMeshMapper = FaceMeshMapper()
 
         // Set up delegates
         cameraCapture?.delegate = self
@@ -307,7 +312,8 @@ final class AppViewModel: ObservableObject {
         case .organic: maskStyle = .lowPoly
         case .lowPoly: maskStyle = .circle
         case .circle: maskStyle = .sticker
-        case .sticker: maskStyle = .debug
+        case .sticker: maskStyle = .faceMesh
+        case .faceMesh: maskStyle = .debug
         case .debug: maskStyle = .none
         case .none: maskStyle = .pixelate
         }
@@ -315,10 +321,28 @@ final class AppViewModel: ObservableObject {
     
     // MARK: - Texture Overlay
     
+    /// Whether a face was detected in the loaded texture
+    @Published var textureFaceDetected: Bool = false
+    
     /// Load an image as a texture overlay for the 3D mask
     func loadMaskTexture(from image: NSImage) {
         processingQueue.async { [weak self] in
-            self?.metalRenderer?.loadMaskTexture(from: image)
+            guard let self = self else { return }
+            
+            // Load texture into renderer
+            self.metalRenderer?.loadMaskTexture(from: image)
+            
+            // Detect face in texture for face-to-face mapping
+            let faceDetected = self.faceMeshMapper?.setTextureFace(from: image) ?? false
+            
+            Task { @MainActor in
+                self.textureFaceDetected = faceDetected
+                if faceDetected {
+                    print("Face detected in texture - face mapping enabled")
+                } else {
+                    print("No face in texture - using standard UV mapping")
+                }
+            }
         }
     }
     

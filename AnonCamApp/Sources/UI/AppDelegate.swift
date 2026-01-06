@@ -484,9 +484,15 @@ struct ContentView: View {
             }
             
             if hasTexture {
-                Text("Texture loaded")
-                    .font(.caption)
-                    .foregroundColor(.green)
+                if viewModel.textureFaceDetected {
+                    Text("Texture loaded (face detected)")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                } else {
+                    Text("Texture loaded (no face)")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
 
             if !viewModel.hasPermission {

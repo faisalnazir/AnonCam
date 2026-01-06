@@ -79,6 +79,7 @@ final class MetalRenderer: @unchecked Sendable {
     var isPixelationEnabled: Bool = true
     var is3DMaskEnabled: Bool = false
     var isStickerMode: Bool = false // Simple 2D quad overlay
+    var useFaceMeshMapping: Bool = false // Use face-to-face UV mapping
     var isDebugEnabled: Bool = false  // Show face detection debug info
 
     private var startTime: CFTimeInterval = 0

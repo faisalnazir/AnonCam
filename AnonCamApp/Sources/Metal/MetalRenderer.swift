@@ -208,7 +208,7 @@ final class MetalRenderer: @unchecked Sendable {
         // Camera background shaders
         vertex QuadFragmentIn quadVertexShader(QuadVertex in [[stage_in]]) {
             QuadFragmentIn out;
-            out.position = float4(in.position, 0.0, 1.0);
+            out.position = float4(in.position, 1.0, 1.0);
             out.texCoord = in.texCoord;
             return out;
         }

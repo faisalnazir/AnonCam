@@ -99,6 +99,7 @@ final class MetalRenderer: @unchecked Sendable {
         var hasFace: Int32
         var pixelSize: Float
         var debugMode: Int32  // 1 = show bounding box
+        var orientMatrix: simd_float4x4 // 3D rotation of the head
     }
 
     /// Vertex data structure for mask mesh
@@ -185,6 +186,7 @@ final class MetalRenderer: @unchecked Sendable {
             int hasFace;
             float pixelSize;
             int debugMode;
+            float4x4 orientMatrix;
         };
 
         struct QuadFragmentIn {
@@ -208,6 +210,13 @@ final class MetalRenderer: @unchecked Sendable {
             return out;
         }
         
+        // Helper to compute distance from point 'p' to line segment 'ab'
+        float distToSegment(float2 p, float2 a, float2 b) {
+            float2 pa = p - a, ba = b - a;
+            float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+            return length(pa - ba * h);
+        }
+
         fragment float4 quadFragmentShader(
             QuadFragmentIn in [[stage_in]],
             texture2d<float> cameraTexture [[texture(0)]],
@@ -232,12 +241,12 @@ final class MetalRenderer: @unchecked Sendable {
             
             float4 color = cameraTexture.sample(textureSampler, uv);
             
-            // Draw debug bounding box outline
+            // Draw debug overlays
             if (uniforms.debugMode == 1 && uniforms.hasFace == 1) {
                 float4 r = uniforms.faceRect;
                 float border = 0.003; // Border thickness
                 
-                // Check if we're on the edge of the bounding box
+                // 1. Draw Bounding Box Outline
                 bool onEdge = (abs(in.texCoord.x - r.x) < border && in.texCoord.y >= r.y && in.texCoord.y <= r.y + r.w) ||
                               (abs(in.texCoord.x - (r.x + r.z)) < border && in.texCoord.y >= r.y && in.texCoord.y <= r.y + r.w) ||
                               (abs(in.texCoord.y - r.y) < border && in.texCoord.x >= r.x && in.texCoord.x <= r.x + r.z) ||
@@ -246,8 +255,31 @@ final class MetalRenderer: @unchecked Sendable {
                 if (onEdge) {
                     return float4(0.0, 1.0, 0.0, 1.0); // Bright green border
                 }
+
+                // 2. Draw 3D Axes
+                // Center in NDC [-1, 1], then flip Y to match UV [0, 1]
+                float2 faceCenterUV = float2(r.x + r.z * 0.5, r.y + r.w * 0.5);
                 
-                // Dim the rest of the image slightly to make box pop
+                // Axis length relative to face size
+                float axisLen = r.z * 0.5;
+                
+                // Unit vectors for axes
+                float4 axisX = uniforms.orientMatrix * float4(1, 0, 0, 0);
+                float4 axisY = uniforms.orientMatrix * float4(0, 1, 0, 0);
+                float4 axisZ = uniforms.orientMatrix * float4(0, 0, 1, 0);
+                
+                // Project to 2D UV space
+                // Vision Y is bottom-up, our UV is top-down (flipping Y component of axis)
+                float2 pX = faceCenterUV + float2(axisX.x, -axisX.y) * axisLen;
+                float2 pY = faceCenterUV + float2(axisY.x, -axisY.y) * axisLen;
+                float2 pZ = faceCenterUV + float2(axisZ.x, -axisZ.y) * axisLen;
+                
+                float lineThick = 0.002;
+                if (distToSegment(in.texCoord, faceCenterUV, pX) < lineThick) return float4(1, 0, 0, 1); // X = Red
+                if (distToSegment(in.texCoord, faceCenterUV, pY) < lineThick) return float4(0, 1, 0, 1); // Y = Green
+                if (distToSegment(in.texCoord, faceCenterUV, pZ) < lineThick) return float4(0, 0, 1, 1); // Z = Blue
+                
+                // Dim the rest of the image slightly to make overlays pop
                 if (!isInFace) {
                     color.rgb *= 0.5;
                 }
@@ -603,7 +635,8 @@ final class MetalRenderer: @unchecked Sendable {
                 ),
                 hasFace: faceResult.hasFace ? 1 : 0,
                 pixelSize: isPixelationEnabled ? 0.03 : 0,
-                debugMode: isDebugEnabled ? 1 : 0
+                debugMode: isDebugEnabled ? 1 : 0,
+                orientMatrix: faceResult.pose.modelMatrix
             )
             memcpy(quadUniformBuffer.contents(), &quadUniforms, MemoryLayout<QuadUniforms>.stride)
 
@@ -672,6 +705,19 @@ final class MetalRenderer: @unchecked Sendable {
         commandBuffer.commit()
     }
 
+    private func matrix_perspective_right_hand(fovyRadians: Float, aspectRatio: Float, nearZ: Float, farZ: Float) -> simd_float4x4 {
+        let ys = 1.0 / tanf(fovyRadians * 0.5)
+        let xs = ys / aspectRatio
+        let zs = farZ / (nearZ - farZ)
+        
+        var matrix = matrix_identity_float4x4
+        matrix.columns.0 = SIMD4<Float>(xs,  0,  0,   0)
+        matrix.columns.1 = SIMD4<Float>(0,  ys,  0,   0)
+        matrix.columns.2 = SIMD4<Float>(0,   0, zs,  -1)
+        matrix.columns.3 = SIMD4<Float>(0,   0, zs * nearZ, 0)
+        return matrix
+    }
+
     private func updateUniforms(from faceResult: FaceTrackingResult) -> MaskUniforms {
         var uniforms = MaskUniforms()
 
@@ -693,44 +739,57 @@ final class MetalRenderer: @unchecked Sendable {
             let faceCenterX = Float(bbox.midX)
             let faceCenterY = Float(bbox.midY)
             
-            // Convert to NDC [-1, 1]
-            // Vision Y: 0=bottom, 1=top. Metal screen: 0=top, 1=bottom
+            // Convert to NDC [-1, 1] for translation base
             let ndcX = faceCenterX * 2.0 - 1.0
             let ndcY = -(faceCenterY * 2.0 - 1.0) // Flip Y for Metal screen coords
             
-            // Use uniform scale based on face size
-            // The mask geometries are roughly unit-sized (-0.5 to 0.5)
-            // Scale to match face bounding box, with some padding
-            let uniformScale = max(faceWidth, faceHeight) * 1.5  // Uniform scale
+            // Perspective Setup
+            let fov = 45.0 * Float.pi / 180.0
+            let tanHalfFov = tan(fov * 0.5)
             
-            // Build scale matrix (uniform scale to preserve shape)
+            // Calculate distance based on face width relative to screen
+            // If face occupies 100% width, it should be at a distance that fits FOV
+            // Use a slight multiplier to prevent mask from being too small
+            let distance = 1.0 / (faceWidth * tanHalfFov * 1.5)
+            
+            // Place mask in 3D space
+            // Transform NDC to 3D View space
+            let worldX = ndcX * distance * aspect * tanHalfFov
+            let worldY = ndcY * distance * tanHalfFov
+            let worldZ = -distance
+            
+            // Use a constant scale for the mask as distance handles sizing relative to screen.
+            // A scale of ~1.33 ensures the unit-sized mask geometry matches the face width 
+            // given the distance calculation used.
+            let headScale: Float = 1.33
+            
+            // Build scale matrix
             var scaleMatrix = matrix_identity_float4x4
-            scaleMatrix[0][0] = uniformScale
-            scaleMatrix[1][1] = uniformScale
-            scaleMatrix[2][2] = uniformScale
+            scaleMatrix[0][0] = headScale
+            scaleMatrix[1][1] = headScale
+            scaleMatrix[2][2] = headScale
             
             // Apply rotation from face pose
             let rotationMatrix = faceResult.pose.modelMatrix
             
             // Build translation matrix
             var translationMatrix = matrix_identity_float4x4
-            translationMatrix.columns.3 = SIMD4<Float>(ndcX, ndcY, 0.5, 1.0)
+            translationMatrix.columns.3 = SIMD4<Float>(worldX, worldY, worldZ, 1.0)
             
             // Final transform: Translate * Rotate * Scale
             uniforms.modelMatrix = translationMatrix * rotationMatrix * scaleMatrix
+            
+            // Projection Matrix (Perspective)
+            uniforms.viewProjectionMatrix = matrix_perspective_right_hand(
+                fovyRadians: fov,
+                aspectRatio: aspect,
+                nearZ: 0.1,
+                farZ: 100.0
+            )
         } else {
             uniforms.modelMatrix = matrix_identity_float4x4
+            uniforms.viewProjectionMatrix = matrix_identity_float4x4
         }
-
-        // Orthographic projection with aspect ratio correction
-        // This ensures circles stay circular regardless of screen aspect
-        var projection = matrix_identity_float4x4
-        projection[0][0] = 1.0 / aspect  // Correct for aspect ratio in X
-        projection[1][1] = 1.0           // Y unchanged
-        projection[2][2] = -0.5          // Scale depth
-        projection[3][2] = 0.5           // Offset depth
-        
-        uniforms.viewProjectionMatrix = projection
 
         return uniforms
     }

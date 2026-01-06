@@ -64,7 +64,8 @@ final class AppViewModel: ObservableObject {
                 
                 // Configure Renderer based on style
                 self.metalRenderer?.isPixelationEnabled = (newStyle == .pixelate)
-                self.metalRenderer?.is3DMaskEnabled = (newStyle == .helmet || newStyle == .organic || newStyle == .lowPoly || newStyle == .circle)
+                self.metalRenderer?.is3DMaskEnabled = (newStyle == .helmet || newStyle == .organic || newStyle == .lowPoly || newStyle == .circle || newStyle == .sticker)
+                self.metalRenderer?.isStickerMode = (newStyle == .sticker)
                 self.metalRenderer?.isDebugEnabled = (newStyle == .debug)
                 
                 // Only update geometry if using a 3D mask
@@ -81,6 +82,7 @@ final class AppViewModel: ObservableObject {
         case organic = "Organic"
         case lowPoly = "Low Poly"
         case circle = "Circle"
+        case sticker = "Sticker"
         case debug = "Debug"
         case none = "None"
 
@@ -90,6 +92,7 @@ final class AppViewModel: ObservableObject {
             case .organic: return .organicMask()
             case .lowPoly: return .lowPolyMask()
             case .circle: return .circleMask()
+            case .sticker: return .stickerMask()
             default: return .helmetMask()
             }
         }
@@ -294,7 +297,8 @@ final class AppViewModel: ObservableObject {
         case .helmet: maskStyle = .organic
         case .organic: maskStyle = .lowPoly
         case .lowPoly: maskStyle = .circle
-        case .circle: maskStyle = .debug
+        case .circle: maskStyle = .sticker
+        case .sticker: maskStyle = .debug
         case .debug: maskStyle = .none
         case .none: maskStyle = .pixelate
         }

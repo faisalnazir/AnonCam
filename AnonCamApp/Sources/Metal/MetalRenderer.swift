@@ -77,6 +77,7 @@ final class MetalRenderer: @unchecked Sendable {
     // Rendering Options
     var isPixelationEnabled: Bool = true
     var is3DMaskEnabled: Bool = false
+    var isStickerMode: Bool = false // Simple 2D quad overlay
     var isDebugEnabled: Bool = false  // Show face detection debug info
 
     private var startTime: CFTimeInterval = 0
@@ -92,6 +93,7 @@ final class MetalRenderer: @unchecked Sendable {
         var time: Float = 0
         var hasFace: Int32 = 0
         var hasTexture: Int32 = 0  // Flag for texture overlay
+        var isStickerMode: Int32 = 0 // Flag for 2D sticker mode
     }
 
     struct QuadUniforms {
@@ -178,6 +180,7 @@ final class MetalRenderer: @unchecked Sendable {
             float time;
             int hasFace;
             int hasTexture;  // Flag for texture overlay
+            int isStickerMode;
         };
         
         // Uniforms for camera background effects (Pixelation)
@@ -662,6 +665,7 @@ final class MetalRenderer: @unchecked Sendable {
 
             // Update uniforms
             var uniforms = updateUniforms(from: faceResult)
+            uniforms.isStickerMode = isStickerMode ? 1 : 0
             
             // Set texture flag if we have a mask texture
             if let texture = maskTexture {
@@ -730,62 +734,86 @@ final class MetalRenderer: @unchecked Sendable {
         let aspect = Float(outputWidth) / Float(outputHeight)
 
         if faceResult.hasFace {
-            // Get face center and size from bounding box (normalized [0,1])
-            let bbox = faceResult.boundingBox
-            let faceWidth = Float(bbox.width)
-            let faceHeight = Float(bbox.height)
-            
-            // Face center in normalized coordinates [0,1]
-            let faceCenterX = Float(bbox.midX)
-            let faceCenterY = Float(bbox.midY)
-            
-            // Convert to NDC [-1, 1] for translation base
-            let ndcX = faceCenterX * 2.0 - 1.0
-            let ndcY = -(faceCenterY * 2.0 - 1.0) // Flip Y for Metal screen coords
-            
-            // Perspective Setup
-            let fov = 45.0 * Float.pi / 180.0
-            let tanHalfFov = tan(fov * 0.5)
-            
-            // Calculate distance based on face width relative to screen
-            // If face occupies 100% width, it should be at a distance that fits FOV
-            // Use a slight multiplier to prevent mask from being too small
-            let distance = 1.0 / (faceWidth * tanHalfFov * 1.5)
-            
-            // Place mask in 3D space
-            // Transform NDC to 3D View space
-            let worldX = ndcX * distance * aspect * tanHalfFov
-            let worldY = ndcY * distance * tanHalfFov
-            let worldZ = -distance
-            
-            // Use a constant scale for the mask as distance handles sizing relative to screen.
-            // A scale of ~1.33 ensures the unit-sized mask geometry matches the face width 
-            // given the distance calculation used.
-            let headScale: Float = 1.33
-            
-            // Build scale matrix
-            var scaleMatrix = matrix_identity_float4x4
-            scaleMatrix[0][0] = headScale
-            scaleMatrix[1][1] = headScale
-            scaleMatrix[2][2] = headScale
-            
-            // Apply rotation from face pose
-            let rotationMatrix = faceResult.pose.modelMatrix
-            
-            // Build translation matrix
-            var translationMatrix = matrix_identity_float4x4
-            translationMatrix.columns.3 = SIMD4<Float>(worldX, worldY, worldZ, 1.0)
-            
-            // Final transform: Translate * Rotate * Scale
-            uniforms.modelMatrix = translationMatrix * rotationMatrix * scaleMatrix
-            
-            // Projection Matrix (Perspective)
-            uniforms.viewProjectionMatrix = matrix_perspective_right_hand(
-                fovyRadians: fov,
-                aspectRatio: aspect,
-                nearZ: 0.1,
-                farZ: 100.0
-            )
+            if isStickerMode {
+                // SIMPLE 2D STICKER MODE: Map directly to bounding box
+                let bbox = faceResult.boundingBox
+                
+                // NDC coordinates for the bounding box
+                let ndcX = Float(bbox.minX) * 2.0 - 1.0
+                let ndcY = -(Float(bbox.minY) * 2.0 - 1.0)
+                let ndcW = Float(bbox.width) * 2.0
+                let ndcH = Float(bbox.height) * 2.0
+                
+                // Translation: Center of the sticker in NDC
+                // Note: ndcY is top coordinate, we need center which is ndcY - ndcH/2
+                let centerX = ndcX + ndcW * 0.5
+                let centerY = ndcY - ndcH * 0.5
+                
+                var translationMatrix = matrix_identity_float4x4
+                translationMatrix.columns.3 = SIMD4<Float>(centerX, centerY, 0.5, 1.0)
+                
+                // Scale: Dimensions in NDC
+                var scaleMatrix = matrix_identity_float4x4
+                scaleMatrix[0][0] = ndcW
+                scaleMatrix[1][1] = ndcH
+                scaleMatrix[2][2] = 1.0
+                
+                // No rotation for sticker mode (keeps it aligned to camera)
+                uniforms.modelMatrix = translationMatrix * scaleMatrix
+                
+                // Simple orthogonal projection
+                var projection = matrix_identity_float4x4
+                projection[2][2] = -0.5
+                projection[3][2] = 0.5
+                uniforms.viewProjectionMatrix = projection
+                
+            } else {
+                // PERSPECTIVE 3D MODE
+                // Get face center and size from bounding box (normalized [0,1])
+                let bbox = faceResult.boundingBox
+                let faceWidth = Float(bbox.width)
+                
+                // Face center in normalized coordinates [0,1]
+                let faceCenterX = Float(bbox.midX)
+                let faceCenterY = Float(bbox.midY)
+                
+                // Convert to NDC [-1, 1] for translation base
+                let ndcX = faceCenterX * 2.0 - 1.0
+                let ndcY = -(faceCenterY * 2.0 - 1.0) // Flip Y for Metal screen coords
+                
+                // Perspective Setup
+                let fov = 45.0 * Float.pi / 180.0
+                let tanHalfFov = tan(fov * 0.5)
+                
+                // Calculate distance based on face width relative to screen
+                let distance = 1.0 / (faceWidth * tanHalfFov * 1.5)
+                
+                // Place mask in 3D space
+                let worldX = ndcX * distance * aspect * tanHalfFov
+                let worldY = ndcY * distance * tanHalfFov
+                let worldZ = -distance
+                
+                let headScale: Float = 1.33
+                
+                var scaleMatrix = matrix_identity_float4x4
+                scaleMatrix[0][0] = headScale
+                scaleMatrix[1][1] = headScale
+                scaleMatrix[2][2] = headScale
+                
+                let rotationMatrix = faceResult.pose.modelMatrix
+                
+                var translationMatrix = matrix_identity_float4x4
+                translationMatrix.columns.3 = SIMD4<Float>(worldX, worldY, worldZ, 1.0)
+                
+                uniforms.modelMatrix = translationMatrix * rotationMatrix * scaleMatrix
+                
+                uniforms.viewProjectionMatrix = matrix_perspective_right_hand(
+                    fovyRadians: fov,
+                    aspectRatio: aspect,
+                    nearZ: 0.1,
+                    farZ: 100.0
+                )
+            }
         } else {
             uniforms.modelMatrix = matrix_identity_float4x4
             uniforms.viewProjectionMatrix = matrix_identity_float4x4

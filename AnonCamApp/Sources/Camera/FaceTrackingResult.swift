@@ -239,4 +239,28 @@ struct MaskGeometry {
         
         return MaskGeometry(vertices: vertices, indices: indices, uvs: uvs)
     }
+    
+    /// Create a simple 2D flat quad for sticker/patch mode
+    static func stickerMask() -> MaskGeometry {
+        let vertices: [SIMD3<Float>] = [
+            SIMD3<Float>(-0.5, -0.5, 0.1),
+            SIMD3<Float>( 0.5, -0.5, 0.1),
+            SIMD3<Float>(-0.5,  0.5, 0.1),
+            SIMD3<Float>( 0.5,  0.5, 0.1)
+        ]
+        
+        let indices: [UInt16] = [
+            0, 1, 2,
+            1, 3, 2
+        ]
+        
+        let uvs: [SIMD2<Float>] = [
+            SIMD2<Float>(0, 1),
+            SIMD2<Float>(1, 1),
+            SIMD2<Float>(0, 0),
+            SIMD2<Float>(1, 0)
+        ]
+        
+        return MaskGeometry(vertices: vertices, indices: indices, uvs: uvs)
+    }
 }

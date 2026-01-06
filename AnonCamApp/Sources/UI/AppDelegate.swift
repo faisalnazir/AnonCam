@@ -459,6 +459,15 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
             }
             
+            // Mask scale slider
+            HStack {
+                Text("Size:")
+                Slider(value: $viewModel.maskScale, in: 0.5...2.0, step: 0.1)
+                    .frame(width: 150)
+                Text(String(format: "%.1fx", viewModel.maskScale))
+                    .frame(width: 40)
+            }
+            
             // Texture controls
             HStack(spacing: 12) {
                 Button("Load Texture") {

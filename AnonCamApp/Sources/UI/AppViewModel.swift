@@ -55,6 +55,15 @@ final class AppViewModel: ObservableObject {
             }
         }
     }
+    
+    @Published var maskScale: Float = 1.0 {
+        didSet {
+            let newScale = maskScale
+            processingQueue.async { [weak self] in
+                self?.metalRenderer?.maskScale = newScale
+            }
+        }
+    }
 
     var maskStyle: MaskStyle = .pixelate {
         didSet {

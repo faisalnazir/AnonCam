@@ -110,7 +110,7 @@ fragment float4 quadFragmentShader(
 /// Vertex shader for 3D face mask
 vertex MaskFragmentIn maskVertexShader(
     MaskVertex in [[stage_in]],
-    constant MaskUniforms &uniforms [[buffer(0)]]
+    constant MaskUniforms &uniforms [[buffer(1)]]
 ) {
     MaskFragmentIn out;
 

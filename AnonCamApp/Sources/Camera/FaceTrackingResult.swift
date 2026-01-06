@@ -87,180 +87,105 @@ struct FaceTrackingResult {
 
 /// 3D mask that sits over the face
 struct MaskGeometry {
-    /// Vertex positions for the mask mesh (local space)
     let vertices: [SIMD3<Float>]
-
-    /// Triangle indices
     let indices: [UInt16]
-
-    /// UV coordinates for texturing
     let uvs: [SIMD2<Float>]
 
-    /// Create a simple helmet/mask geometry
-    static func helmetMask(segmentCount: Int = 24, heightSegments: Int = 12) -> MaskGeometry {
+    /// Simple ellipsoid mask facing +Z (toward camera)
+    static func helmetMask(segmentCount: Int = 32, ringCount: Int = 16) -> MaskGeometry {
         var vertices: [SIMD3<Float>] = []
         var indices: [UInt16] = []
         var uvs: [SIMD2<Float>] = []
-
-        let radius: Float = 0.35
-        let height: Float = 0.45
-
-        // Generate vertices (hemisphere + extended neck)
-        for y in 0...heightSegments {
-            let v = Float(y) / Float(heightSegments)
-            let yAngle = v * .pi / 2.2  // Slightly more than 90 degrees for neck coverage
-            let yPos = cos(yAngle) * height - height * 0.25
-            let ringRadius = sin(yAngle) * radius
-
-            for x in 0..<segmentCount {
-                let u = Float(x) / Float(segmentCount)
-                let xAngle = u * 2 * .pi
-
-                let xPos = cos(xAngle) * ringRadius
-                let zPos = sin(xAngle) * ringRadius
-
-                vertices.append(SIMD3<Float>(xPos, yPos, zPos))
-                uvs.append(SIMD2<Float>(u, v))
+        
+        // Generate sphere vertices
+        for ring in 0...ringCount {
+            let phi = Float(ring) / Float(ringCount) * Float.pi * 0.5 // 0 to pi/2 (hemisphere)
+            let y = cos(phi)
+            let r = sin(phi)
+            
+            for seg in 0...segmentCount {
+                let theta = Float(seg) / Float(segmentCount) * Float.pi * 2.0
+                let x = r * cos(theta)
+                let z = r * sin(theta)
+                
+                vertices.append(SIMD3<Float>(x * 0.5, y * 0.6, z * 0.4))
+                uvs.append(SIMD2<Float>(Float(seg) / Float(segmentCount), Float(ring) / Float(ringCount)))
             }
         }
-
+        
         // Generate indices
-        for y in 0..<heightSegments {
-            for x in 0..<segmentCount {
-                let nextX = (x + 1) % segmentCount
-
-                let i0 = UInt16(y * segmentCount + x)
-                let i1 = UInt16(y * segmentCount + nextX)
-                let i2 = UInt16((y + 1) * segmentCount + x)
-                let i3 = UInt16((y + 1) * segmentCount + nextX)
-
-                // Two triangles per quad
-                indices.append(contentsOf: [i0, i2, i1])
-                indices.append(contentsOf: [i1, i2, i3])
+        let vertsPerRing = segmentCount + 1
+        for ring in 0..<ringCount {
+            for seg in 0..<segmentCount {
+                let curr = ring * vertsPerRing + seg
+                let next = curr + vertsPerRing
+                
+                indices.append(UInt16(curr))
+                indices.append(UInt16(next))
+                indices.append(UInt16(curr + 1))
+                
+                indices.append(UInt16(curr + 1))
+                indices.append(UInt16(next))
+                indices.append(UInt16(next + 1))
             }
         }
-
+        
         return MaskGeometry(vertices: vertices, indices: indices, uvs: uvs)
     }
 
-    /// Create a more organic face-shaped mask
+    /// Oval face mask
     static func organicMask() -> MaskGeometry {
-        // Create mask based on average face proportions
-        var vertices: [SIMD3<Float>] = []
-
-        // Front face (8x8 grid)
-        let faceWidth: Float = 0.4
-        let faceHeight: Float = 0.5
-        let faceDepth: Float = 0.2
-
-        let rows = 10
-        let cols = 12
-
-        for y in 0...rows {
-            let v = Float(y) / Float(rows)
-            let yPos = (v - 0.5) * faceHeight
-
-            for x in 0...cols {
-                let u = Float(x) / Float(cols)
-                let xPos = (u - 0.5) * faceWidth
-
-                // Curve outward for face depth
-                let angleX = u * .pi - .pi / 2
-                let angleY = v * .pi - .pi / 2
-                let zPos = sin(angleX) * sin(angleY) * faceDepth
-
-                vertices.append(SIMD3<Float>(xPos, yPos, zPos + faceDepth))
-            }
-        }
-
-        // Generate indices
-        var indices: [UInt16] = []
-        for y in 0..<rows {
-            for x in 0..<cols {
-                let i0 = UInt16(y * (cols + 1) + x)
-                let i1 = UInt16(y * (cols + 1) + x + 1)
-                let i2 = UInt16((y + 1) * (cols + 1) + x)
-                let i3 = UInt16((y + 1) * (cols + 1) + x + 1)
-
-                indices.append(contentsOf: [i0, i2, i1])
-                indices.append(contentsOf: [i1, i2, i3])
-            }
-        }
-
-        // Generate UVs
-        var uvs: [SIMD2<Float>] = []
-        for y in 0...rows {
-            let v = Float(y) / Float(rows)
-            for x in 0...cols {
-                let u = Float(x) / Float(cols)
-                uvs.append(SIMD2<Float>(u, v))
-            }
-        }
-
-        return MaskGeometry(vertices: vertices, indices: indices, uvs: uvs)
+        return helmetMask(segmentCount: 24, ringCount: 12)
     }
 
-    /// Create a stylized low-poly mask
+    /// Low poly version
     static func lowPolyMask() -> MaskGeometry {
-        return helmetMask(segmentCount: 8, heightSegments: 6)
+        return helmetMask(segmentCount: 8, ringCount: 4)
     }
     
-    /// Create a flat circular mask (disc)
+    /// Flat circle
     static func circleMask(segments: Int = 32) -> MaskGeometry {
         var vertices: [SIMD3<Float>] = []
         var indices: [UInt16] = []
         var uvs: [SIMD2<Float>] = []
         
-        let radius: Float = 0.4
-        
-        // Center vertex
-        vertices.append(SIMD3<Float>(0, 0, 0.1))
+        // Center
+        vertices.append(SIMD3<Float>(0, 0, 0))
         uvs.append(SIMD2<Float>(0.5, 0.5))
         
-        // Ring vertices
-        for i in 0..<segments {
-            let angle = Float(i) / Float(segments) * 2 * .pi
-            let x = cos(angle) * radius
-            let y = sin(angle) * radius
-            vertices.append(SIMD3<Float>(x, y, 0.1))
-            uvs.append(SIMD2<Float>(
-                (cos(angle) + 1) / 2,
-                (sin(angle) + 1) / 2
-            ))
+        // Ring - flip U coordinate to correct horizontal flip
+        for i in 0...segments {
+            let angle = Float(i) / Float(segments) * Float.pi * 2.0
+            vertices.append(SIMD3<Float>(cos(angle) * 0.5, sin(angle) * 0.5, 0))
+            uvs.append(SIMD2<Float>(1.0 - (cos(angle) + 1) * 0.5, (sin(angle) + 1) * 0.5))
         }
         
-        // Triangle fan from center
+        // Fan triangles
         for i in 0..<segments {
-            let nextI = (i + 1) % segments
-            indices.append(0)  // Center
+            indices.append(0)
             indices.append(UInt16(i + 1))
-            indices.append(UInt16(nextI + 1))
+            indices.append(UInt16(i + 2))
         }
         
         return MaskGeometry(vertices: vertices, indices: indices, uvs: uvs)
     }
     
-    /// Create a simple 2D flat quad for sticker/patch mode
+    /// Flat quad for stickers
     static func stickerMask() -> MaskGeometry {
         let vertices: [SIMD3<Float>] = [
-            SIMD3<Float>(-0.5, -0.5, 0.1),
-            SIMD3<Float>( 0.5, -0.5, 0.1),
-            SIMD3<Float>(-0.5,  0.5, 0.1),
-            SIMD3<Float>( 0.5,  0.5, 0.1)
+            SIMD3<Float>(-0.5, -0.5, 0),
+            SIMD3<Float>( 0.5, -0.5, 0),
+            SIMD3<Float>( 0.5,  0.5, 0),
+            SIMD3<Float>(-0.5,  0.5, 0)
         ]
-        
-        let indices: [UInt16] = [
-            0, 1, 2,
-            1, 3, 2
-        ]
-        
+        let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+        // Flip V coordinate to correct vertical flip
         let uvs: [SIMD2<Float>] = [
-            SIMD2<Float>(0, 1),
-            SIMD2<Float>(1, 1),
-            SIMD2<Float>(0, 0),
-            SIMD2<Float>(1, 0)
+            SIMD2<Float>(0, 0),  // bottom-left vertex -> top-left UV
+            SIMD2<Float>(1, 0),  // bottom-right vertex -> top-right UV
+            SIMD2<Float>(1, 1),  // top-right vertex -> bottom-right UV
+            SIMD2<Float>(0, 1)   // top-left vertex -> bottom-left UV
         ]
-        
         return MaskGeometry(vertices: vertices, indices: indices, uvs: uvs)
     }
 }

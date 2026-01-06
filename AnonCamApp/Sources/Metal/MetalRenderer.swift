@@ -70,6 +70,7 @@ final class MetalRenderer: @unchecked Sendable {
     var maskColor: SIMD4<Float> = SIMD4<Float>(0.2, 0.25, 0.3, 1.0) // Slate blue-gray
     var maskRoughness: Float = 0.7
     var maskMetallic: Float = 0.0
+    var maskScale: Float = 1.0  // User-adjustable scale multiplier
     
     // Texture overlay
     var maskTexture: (any MTLTexture)?
@@ -81,6 +82,20 @@ final class MetalRenderer: @unchecked Sendable {
     var isDebugEnabled: Bool = false  // Show face detection debug info
 
     private var startTime: CFTimeInterval = 0
+    
+    // Smoothing for face tracking
+    private var smoothedCenterX: Float = 0.5
+    private var smoothedCenterY: Float = 0.5
+    private var smoothedWidth: Float = 0.2
+    private var smoothedHeight: Float = 0.25
+    private var velocityX: Float = 0
+    private var velocityY: Float = 0
+    private var hasInitializedSmoothing = false
+    
+    // Smoothing parameters
+    var smoothingFactor: Float = 0.15  // Lower = smoother (0.1-0.3 typical)
+    var velocityDamping: Float = 0.8   // Momentum decay
+    var movementThreshold: Float = 0.005  // Minimum movement to trigger update
 
     // MARK: - Mask Uniforms
 
@@ -296,7 +311,7 @@ final class MetalRenderer: @unchecked Sendable {
         // Face mask shaders
         vertex MaskFragmentIn maskVertexShader(
             MaskVertex in [[stage_in]],
-            constant MaskUniforms &uniforms [[buffer(0)]]
+            constant MaskUniforms &uniforms [[buffer(1)]]
         ) {
             MaskFragmentIn out;
             float4 worldPos = uniforms.modelMatrix * float4(in.position, 1.0);
@@ -470,74 +485,57 @@ final class MetalRenderer: @unchecked Sendable {
                                             length: quadVertices.count * MemoryLayout<Float>.stride,
                                             options: [])
 
-        // Build mask vertex data
-        // Build mask vertex data as explicit Float array to avoid alignment issues
-        var maskFloatData: [Float] = []
-        maskFloatData.reserveCapacity(maskGeometry.vertices.count * 8)
-        
-        for (i, vertex) in maskGeometry.vertices.enumerated() {
-            let normal = normalize(vertex)
-            let uv = i < maskGeometry.uvs.count ? maskGeometry.uvs[i] : SIMD2<Float>(0, 0)
-            
-            // Position
-            maskFloatData.append(vertex.x)
-            maskFloatData.append(vertex.y)
-            maskFloatData.append(vertex.z)
-            
-            // Normal
-            maskFloatData.append(normal.x)
-            maskFloatData.append(normal.y)
-            maskFloatData.append(normal.z)
-            
-            // UV
-            maskFloatData.append(uv.x)
-            maskFloatData.append(uv.y)
-        }
-
-        maskVertexBuffer = device.makeBuffer(bytes: maskFloatData,
-                                            length: maskFloatData.count * MemoryLayout<Float>.stride,
-                                            options: [])
-
-        maskIndexCount = maskGeometry.indices.count
-        maskIndexBuffer = device.makeBuffer(bytes: maskGeometry.indices,
-                                          length: maskGeometry.indices.count * MemoryLayout<UInt16>.stride,
-                                          options: [])
-
         maskUniformBuffer = device.makeBuffer(length: MemoryLayout<MaskUniforms>.stride, options: [])
         quadUniformBuffer = device.makeBuffer(length: MemoryLayout<QuadUniforms>.stride, options: [])
 
+        // Build mask geometry
+        updateMaskGeometry()
 
         setupOutputTextures()
     }
 
     private func updateMaskGeometry() {
-        var maskVertices: [MaskVertexData] = []
+        // Build vertex data as packed floats: pos(3) + normal(3) + uv(2) = 8 floats per vertex
+        var floatData: [Float] = []
+        
         for i in 0..<maskGeometry.vertices.count {
-            let vertex = maskGeometry.vertices[i]
-            let uv = i < maskGeometry.uvs.count ? maskGeometry.uvs[i] : SIMD2<Float>(0, 0)
+            let pos = maskGeometry.vertices[i]
+            let uv = i < maskGeometry.uvs.count ? maskGeometry.uvs[i] : SIMD2<Float>(0.5, 0.5)
             
-            // For sticker mode or flat masks, we want a forward-facing normal
-            // For 3D masks, we use the vertex position as a proxy for the sphere-like normal
-            var normal = normalize(vertex)
-            if normal.x.isNaN || normal.y.isNaN || normal.z.isNaN || length(vertex) < 0.0001 {
-                normal = SIMD3<Float>(0, 0, 1)
+            // Calculate normal - for flat masks use forward, for 3D use position-based
+            var normal: SIMD3<Float>
+            let len = length(pos)
+            if len > 0.001 {
+                normal = normalize(pos)
+            } else {
+                normal = SIMD3<Float>(0, 0, 1) // Forward facing for center vertices
             }
             
-            maskVertices.append(MaskVertexData(
-                position: vertex,
-                normal: normal,
-                texCoord: uv
-            ))
+            // Position
+            floatData.append(pos.x)
+            floatData.append(pos.y)
+            floatData.append(pos.z)
+            
+            // Normal
+            floatData.append(normal.x)
+            floatData.append(normal.y)
+            floatData.append(normal.z)
+            
+            // UV
+            floatData.append(uv.x)
+            floatData.append(uv.y)
         }
 
-        maskVertexBuffer = device.makeBuffer(bytes: maskVertices,
-                                            length: maskVertices.count * MemoryLayout<MaskVertexData>.stride,
+        maskVertexBuffer = device.makeBuffer(bytes: floatData,
+                                            length: floatData.count * MemoryLayout<Float>.stride,
                                             options: [])
 
         maskIndexCount = maskGeometry.indices.count
         maskIndexBuffer = device.makeBuffer(bytes: maskGeometry.indices,
                                           length: maskGeometry.indices.count * MemoryLayout<UInt16>.stride,
                                           options: [])
+        
+        print("Mask geometry: \(maskGeometry.vertices.count) vertices, \(maskIndexCount) indices")
     }
 
     private func setupOutputTextures() {
@@ -691,8 +689,11 @@ final class MetalRenderer: @unchecked Sendable {
             }
             
             memcpy(uniformBuffer.contents(), &uniforms, MemoryLayout<MaskUniforms>.stride)
-            renderEncoder.setVertexBuffer(uniformBuffer, offset: 0, index: 0)
-            renderEncoder.setVertexBuffer(vertexBuffer, offset: 0, index: 1)
+            
+            // Vertex buffer at index 0 (matches vertex descriptor)
+            // Uniform buffer at index 1 for vertex shader
+            renderEncoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+            renderEncoder.setVertexBuffer(uniformBuffer, offset: 0, index: 1)
             renderEncoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
 
             renderEncoder.drawIndexedPrimitives(type: .triangle,
@@ -737,6 +738,8 @@ final class MetalRenderer: @unchecked Sendable {
         return matrix
     }
 
+    private var debugCounter = 0
+    
     private func updateUniforms(from faceResult: FaceTrackingResult) -> MaskUniforms {
         var uniforms = MaskUniforms()
 
@@ -746,87 +749,66 @@ final class MetalRenderer: @unchecked Sendable {
         uniforms.metallic = maskMetallic
         uniforms.time = Float(CACurrentMediaTime() - startTime)
 
-        let aspect = Float(outputWidth) / Float(outputHeight)
-
         if faceResult.hasFace {
-            if isStickerMode {
-                // SIMPLE 2D STICKER MODE: Map directly to bounding box
-                let bbox = faceResult.boundingBox
-                
-                // NDC center
-                let centerX = Float(bbox.midX) * 2.0 - 1.0
-                let centerY = Float(bbox.midY) * 2.0 - 1.0
-                
-                // NDC dimension
-                let ndcW = Float(bbox.width) * 2.0
-                let ndcH = Float(bbox.height) * 2.0
-                
-                var translationMatrix = matrix_identity_float4x4
-                translationMatrix.columns.3 = SIMD4<Float>(centerX, centerY, 0.5, 1.0)
-                
-                // Scale: Dimensions in NDC
-                var scaleMatrix = matrix_identity_float4x4
-                scaleMatrix[0][0] = ndcW
-                scaleMatrix[1][1] = ndcH
-                scaleMatrix[2][2] = 1.0
-                
-                // No rotation for sticker mode (keeps it aligned to camera)
-                uniforms.modelMatrix = translationMatrix * scaleMatrix
-                
-                // Simple orthogonal projection
-                var projection = matrix_identity_float4x4
-                projection[2][2] = -0.5
-                projection[3][2] = 0.5
-                uniforms.viewProjectionMatrix = projection
-                
-            } else {
-                // PERSPECTIVE 3D MODE
-                // Get face center and size from bounding box (normalized [0,1])
-                let bbox = faceResult.boundingBox
-                let faceWidth = Float(bbox.width)
-                
-                // Face center in normalized coordinates [0,1]
-                let faceCenterX = Float(bbox.midX)
-                let faceCenterY = Float(bbox.midY)
-                
-                // Convert to NDC [-1, 1] for translation base
-                let ndcX = faceCenterX * 2.0 - 1.0
-                let ndcY = faceCenterY * 2.0 - 1.0 // NO FLIP (Vision and NDC are both bottom-up)
-                
-                // Perspective Setup
-                let fov = 45.0 * Float.pi / 180.0
-                let tanHalfFov = tan(fov * 0.5)
-                
-                // Calculate distance based on face width relative to screen
-                let distance = 1.0 / (faceWidth * tanHalfFov * 1.5)
-                
-                // Place mask in 3D space
-                let worldX = ndcX * distance * aspect * tanHalfFov
-                let worldY = ndcY * distance * tanHalfFov
-                let worldZ = -distance
-                
-                let headScale: Float = 1.33
-                
-                var scaleMatrix = matrix_identity_float4x4
-                scaleMatrix[0][0] = headScale
-                scaleMatrix[1][1] = headScale
-                scaleMatrix[2][2] = headScale
-                
-                let rotationMatrix = faceResult.pose.modelMatrix
-                
-                var translationMatrix = matrix_identity_float4x4
-                translationMatrix.columns.3 = SIMD4<Float>(worldX, worldY, worldZ, 1.0)
-                
-                uniforms.modelMatrix = translationMatrix * rotationMatrix * scaleMatrix
-                
-                uniforms.viewProjectionMatrix = matrix_perspective_right_hand(
-                    fovyRadians: fov,
-                    aspectRatio: aspect,
-                    nearZ: 0.1,
-                    farZ: 100.0
-                )
+            let bbox = faceResult.boundingBox
+            
+            // Raw values from face detection
+            let rawCenterX = Float(bbox.midX)
+            let rawCenterY = Float(bbox.midY)
+            let rawWidth = Float(bbox.width)
+            let rawHeight = Float(bbox.height)
+            
+            // Initialize smoothing on first detection
+            if !hasInitializedSmoothing {
+                smoothedCenterX = rawCenterX
+                smoothedCenterY = rawCenterY
+                smoothedWidth = rawWidth
+                smoothedHeight = rawHeight
+                hasInitializedSmoothing = true
             }
+            
+            // Calculate deltas
+            let dx = rawCenterX - smoothedCenterX
+            let dy = rawCenterY - smoothedCenterY
+            
+            // Apply smoothing with momentum
+            // Only update if movement exceeds threshold OR there's existing velocity
+            if abs(dx) > movementThreshold || abs(velocityX) > 0.001 {
+                velocityX = velocityX * velocityDamping + dx * smoothingFactor
+                smoothedCenterX += velocityX
+            }
+            
+            if abs(dy) > movementThreshold || abs(velocityY) > 0.001 {
+                velocityY = velocityY * velocityDamping + dy * smoothingFactor
+                smoothedCenterY += velocityY
+            }
+            
+            // Smooth size changes (no momentum, just lerp)
+            smoothedWidth += (rawWidth - smoothedWidth) * smoothingFactor
+            smoothedHeight += (rawHeight - smoothedHeight) * smoothingFactor
+            
+            // Convert smoothed values to NDC [-1,1]
+            let centerX = smoothedCenterX * 2.0 - 1.0
+            let centerY = smoothedCenterY * 2.0 - 1.0
+            let scaleX = smoothedWidth * 2.0 * maskScale
+            let scaleY = smoothedHeight * 2.0 * maskScale
+            
+            // Simple 2D transform: scale then translate
+            var modelMatrix = matrix_identity_float4x4
+            modelMatrix[0][0] = scaleX
+            modelMatrix[1][1] = scaleY
+            modelMatrix[2][2] = scaleX
+            modelMatrix[3][0] = centerX
+            modelMatrix[3][1] = centerY
+            modelMatrix[3][2] = 0
+            
+            uniforms.modelMatrix = modelMatrix
+            uniforms.viewProjectionMatrix = matrix_identity_float4x4
         } else {
+            // Reset smoothing when face is lost
+            hasInitializedSmoothing = false
+            velocityX = 0
+            velocityY = 0
             uniforms.modelMatrix = matrix_identity_float4x4
             uniforms.viewProjectionMatrix = matrix_identity_float4x4
         }

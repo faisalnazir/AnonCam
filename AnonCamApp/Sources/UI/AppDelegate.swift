@@ -453,7 +453,7 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!viewModel.hasPermission)
 
-                Button("Mask Style") {
+                Button("Style: \(viewModel.maskStyle.rawValue)") {
                     viewModel.cycleMaskStyle()
                 }
                 .buttonStyle(.bordered)

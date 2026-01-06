@@ -738,16 +738,13 @@ final class MetalRenderer: @unchecked Sendable {
                 // SIMPLE 2D STICKER MODE: Map directly to bounding box
                 let bbox = faceResult.boundingBox
                 
-                // NDC coordinates for the bounding box
-                let ndcX = Float(bbox.minX) * 2.0 - 1.0
-                let ndcY = -(Float(bbox.minY) * 2.0 - 1.0)
+                // NDC center
+                let centerX = Float(bbox.midX) * 2.0 - 1.0
+                let centerY = Float(bbox.midY) * 2.0 - 1.0
+                
+                // NDC dimension
                 let ndcW = Float(bbox.width) * 2.0
                 let ndcH = Float(bbox.height) * 2.0
-                
-                // Translation: Center of the sticker in NDC
-                // Note: ndcY is top coordinate, we need center which is ndcY - ndcH/2
-                let centerX = ndcX + ndcW * 0.5
-                let centerY = ndcY - ndcH * 0.5
                 
                 var translationMatrix = matrix_identity_float4x4
                 translationMatrix.columns.3 = SIMD4<Float>(centerX, centerY, 0.5, 1.0)
@@ -779,7 +776,7 @@ final class MetalRenderer: @unchecked Sendable {
                 
                 // Convert to NDC [-1, 1] for translation base
                 let ndcX = faceCenterX * 2.0 - 1.0
-                let ndcY = -(faceCenterY * 2.0 - 1.0) // Flip Y for Metal screen coords
+                let ndcY = faceCenterY * 2.0 - 1.0 // NO FLIP (Vision and NDC are both bottom-up)
                 
                 // Perspective Setup
                 let fov = 45.0 * Float.pi / 180.0

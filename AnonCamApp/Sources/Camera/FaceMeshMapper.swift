@@ -451,7 +451,7 @@ final class FaceMeshMapper {
                 // Point is inside this triangle - interpolate texture coordinates
                 let textureUV = t1 * bary.x + t2 * bary.y + t3 * bary.z
                 return SIMD2<Float>(
-                    max(0, min(1, textureUV.x)),
+                    max(0, min(1, 1.0 - textureUV.x)),  // Flip X to correct horizontal inversion
                     max(0, min(1, textureUV.y))
                 )
             }
@@ -460,7 +460,7 @@ final class FaceMeshMapper {
         // Fallback: simple linear mapping if point is outside all triangles
         let mappedPoint = textureCenter + relativePoint * textureSize
         return SIMD2<Float>(
-            max(0, min(1, mappedPoint.x)),
+            max(0, min(1, 1.0 - mappedPoint.x)),  // Flip X
             max(0, min(1, mappedPoint.y))
         )
     }

@@ -74,6 +74,7 @@ final class MetalRenderer: @unchecked Sendable {
     
     // Texture overlay
     var maskTexture: (any MTLTexture)?
+    var faceMeshMapper: FaceMeshMapper?  // For face-to-face mapping
     
     // Rendering Options
     var isPixelationEnabled: Bool = true
@@ -538,6 +539,37 @@ final class MetalRenderer: @unchecked Sendable {
         
         print("Mask geometry: \(maskGeometry.vertices.count) vertices, \(maskIndexCount) indices")
     }
+    
+    /// Rebuild vertex buffer with new UV coordinates (for face mesh mapping)
+    private func rebuildVertexBufferWithUVs(_ newUVs: [SIMD2<Float>]) -> any MTLBuffer {
+        var floatData: [Float] = []
+        
+        for i in 0..<maskGeometry.vertices.count {
+            let pos = maskGeometry.vertices[i]
+            let uv = i < newUVs.count ? newUVs[i] : SIMD2<Float>(0.5, 0.5)
+            
+            var normal: SIMD3<Float>
+            let len = length(pos)
+            if len > 0.001 {
+                normal = normalize(pos)
+            } else {
+                normal = SIMD3<Float>(0, 0, 1)
+            }
+            
+            floatData.append(pos.x)
+            floatData.append(pos.y)
+            floatData.append(pos.z)
+            floatData.append(normal.x)
+            floatData.append(normal.y)
+            floatData.append(normal.z)
+            floatData.append(uv.x)
+            floatData.append(uv.y)
+        }
+        
+        return device.makeBuffer(bytes: floatData,
+                                length: floatData.count * MemoryLayout<Float>.stride,
+                                options: [])!
+    }
 
     private func setupOutputTextures() {
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -669,13 +701,19 @@ final class MetalRenderer: @unchecked Sendable {
         // Then draw face mask (With depth write)
         if faceResult.hasFace && is3DMaskEnabled,
            let maskPipeline = maskPipelineState,
-           let vertexBuffer = maskVertexBuffer,
+           var vertexBuffer = maskVertexBuffer,
            let indexBuffer = maskIndexBuffer,
            let uniformBuffer = maskUniformBuffer,
            let depthState = maskDepthState {
 
             renderEncoder.setRenderPipelineState(maskPipeline)
             renderEncoder.setDepthStencilState(depthState)
+            
+            // Update UVs for face mesh mapping if enabled
+            if useFaceMeshMapping, let mapper = faceMeshMapper, mapper.textureFaceMesh != nil {
+                let newUVs = mapper.generateUVMapping(liveFace: faceResult, maskVertices: maskGeometry.vertices)
+                vertexBuffer = rebuildVertexBufferWithUVs(newUVs)
+            }
 
             // Update uniforms
             var uniforms = updateUniforms(from: faceResult)

@@ -152,6 +152,9 @@ final class AppViewModel: ObservableObject {
         faceTracker = VisionFaceTracker()
         metalRenderer = MetalRenderer(device: device)
         faceMeshMapper = FaceMeshMapper()
+        
+        // Share face mesh mapper with renderer
+        metalRenderer?.faceMeshMapper = faceMeshMapper
 
         // Set up delegates
         cameraCapture?.delegate = self

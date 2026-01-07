@@ -451,8 +451,8 @@ final class FaceMeshMapper {
                 // Point is inside this triangle - interpolate texture coordinates
                 let textureUV = t1 * bary.x + t2 * bary.y + t3 * bary.z
                 return SIMD2<Float>(
-                    max(0, min(1, 1.0 - textureUV.x)),  // Flip X to correct horizontal inversion
-                    max(0, min(1, textureUV.y))
+                    max(0, min(1, 1.0 - textureUV.x)),  // Flip X for mirror
+                    max(0, min(1, 1.0 - textureUV.y))   // Flip Y for orientation
                 )
             }
         }
@@ -461,7 +461,7 @@ final class FaceMeshMapper {
         let mappedPoint = textureCenter + relativePoint * textureSize
         return SIMD2<Float>(
             max(0, min(1, 1.0 - mappedPoint.x)),  // Flip X
-            max(0, min(1, mappedPoint.y))
+            max(0, min(1, 1.0 - mappedPoint.y))   // Flip Y
         )
     }
     

@@ -282,50 +282,213 @@ final class FaceMeshMapper {
     // MARK: - UV Mapping
     
     /// Generate UV coordinates that map texture face onto live face
-    /// Returns UV coordinates for each vertex in the mask geometry
+    /// Uses landmark-to-landmark correspondence for accurate feature mapping
     func generateUVMapping(liveFace: FaceTrackingResult, maskVertices: [SIMD3<Float>]) -> [SIMD2<Float>] {
-        guard let textureMesh = textureFaceMesh, !textureMesh.points.isEmpty else {
+        guard let textureMesh = textureFaceMesh, textureMesh.points.count >= 68 else {
             // No texture face - return default UVs
             return maskVertices.map { vertex in
                 SIMD2<Float>((vertex.x + 0.5), (vertex.y + 0.5))
             }
         }
         
-        // Get live face mesh from tracking result
+        // Build live face mesh from landmarks
         let liveMesh = extractFaceMesh(from: liveFace)
-        
-        guard !liveMesh.points.isEmpty else {
+        guard liveMesh.points.count >= 68 else {
             return maskVertices.map { vertex in
                 SIMD2<Float>((vertex.x + 0.5), (vertex.y + 0.5))
             }
         }
         
-        // Calculate transformation from live face to texture face
-        let liveCenter = liveMesh.eyeCenter
-        let textureCenter = textureMesh.eyeCenter
-        let liveScale = liveMesh.interOcularDistance
-        let textureScale = textureMesh.interOcularDistance
+        // Get key anchor points from both faces
+        let liveAnchors = extractAnchorPoints(from: liveMesh)
+        let textureAnchors = extractAnchorPoints(from: textureMesh)
         
-        let scaleRatio = textureScale / max(liveScale, 0.001)
-        
-        // Map each mask vertex to texture UV
+        // Map each mask vertex to texture UV using barycentric interpolation
         return maskVertices.map { vertex in
-            // Vertex is in [-0.5, 0.5] range, convert to [0, 1]
-            let normalizedX = vertex.x + 0.5
-            let normalizedY = vertex.y + 0.5
+            // Convert vertex from [-0.5, 0.5] to [0, 1] normalized space
+            let normalizedPos = SIMD2<Float>(vertex.x + 0.5, vertex.y + 0.5)
             
-            // Transform: translate to live center, scale, translate to texture center
-            let relativeX = (normalizedX - liveCenter.x) * scaleRatio
-            let relativeY = (normalizedY - liveCenter.y) * scaleRatio
-            
-            let textureU = textureCenter.x + relativeX
-            let textureV = textureCenter.y + relativeY
-            
-            return SIMD2<Float>(
-                max(0, min(1, textureU)),
-                max(0, min(1, textureV))
+            // Find which facial region this vertex belongs to and interpolate
+            return mapPointToTexture(
+                point: normalizedPos,
+                liveAnchors: liveAnchors,
+                textureAnchors: textureAnchors,
+                liveBBox: liveFace.boundingBox,
+                textureBBox: textureMesh.boundingBox
             )
         }
+    }
+    
+    /// Key anchor points for face mapping
+    struct FaceAnchors {
+        var leftEye: SIMD2<Float>      // Center of left eye
+        var rightEye: SIMD2<Float>     // Center of right eye
+        var noseTip: SIMD2<Float>      // Tip of nose
+        var leftMouth: SIMD2<Float>    // Left corner of mouth
+        var rightMouth: SIMD2<Float>   // Right corner of mouth
+        var chin: SIMD2<Float>         // Bottom of chin
+        var leftCheek: SIMD2<Float>    // Left cheek (jaw point)
+        var rightCheek: SIMD2<Float>   // Right cheek (jaw point)
+        var forehead: SIMD2<Float>     // Top center (between eyebrows)
+    }
+    
+    /// Extract key anchor points from face mesh
+    private func extractAnchorPoints(from mesh: FaceMesh) -> FaceAnchors {
+        // Left eye center (average of points 42-47)
+        let leftEye = averagePoints(mesh.points, indices: [42, 43, 44, 45, 46, 47])
+        
+        // Right eye center (average of points 36-41)
+        let rightEye = averagePoints(mesh.points, indices: [36, 37, 38, 39, 40, 41])
+        
+        // Nose tip (point 30)
+        let noseTip = mesh[30]
+        
+        // Mouth corners (points 48 and 54)
+        let leftMouth = mesh[54]
+        let rightMouth = mesh[48]
+        
+        // Chin (point 8 - bottom of jaw)
+        let chin = mesh[8]
+        
+        // Cheeks (jaw points 2 and 14)
+        let leftCheek = mesh[14]
+        let rightCheek = mesh[2]
+        
+        // Forehead (midpoint between eyebrows, estimated from points 21 and 22)
+        let forehead = (mesh[21] + mesh[22]) * 0.5
+        
+        return FaceAnchors(
+            leftEye: leftEye,
+            rightEye: rightEye,
+            noseTip: noseTip,
+            leftMouth: leftMouth,
+            rightMouth: rightMouth,
+            chin: chin,
+            leftCheek: leftCheek,
+            rightCheek: rightCheek,
+            forehead: forehead
+        )
+    }
+    
+    /// Average multiple points
+    private func averagePoints(_ points: [SIMD2<Float>], indices: [Int]) -> SIMD2<Float> {
+        var sum = SIMD2<Float>(0, 0)
+        var count: Float = 0
+        for i in indices {
+            if i < points.count {
+                sum += points[i]
+                count += 1
+            }
+        }
+        return count > 0 ? sum / count : SIMD2<Float>(0.5, 0.5)
+    }
+    
+    /// Map a point from live face space to texture UV space
+    private func mapPointToTexture(
+        point: SIMD2<Float>,
+        liveAnchors: FaceAnchors,
+        textureAnchors: FaceAnchors,
+        liveBBox: CGRect,
+        textureBBox: CGRect
+    ) -> SIMD2<Float> {
+        // Convert point to face-relative coordinates using live bounding box
+        let liveCenter = SIMD2<Float>(Float(liveBBox.midX), Float(liveBBox.midY))
+        let liveSize = SIMD2<Float>(Float(liveBBox.width), Float(liveBBox.height))
+        
+        // Normalize point relative to live face center
+        let relativePoint = (point - liveCenter) / liveSize
+        
+        // Find the triangular region this point falls into and use barycentric coords
+        // We divide the face into regions: forehead, left eye, right eye, nose, left cheek, right cheek, mouth, chin
+        
+        // Determine which region based on relative position
+        let textureCenter = SIMD2<Float>(Float(textureBBox.midX), Float(textureBBox.midY))
+        let textureSize = SIMD2<Float>(Float(textureBBox.width), Float(textureBBox.height))
+        
+        // Use triangular interpolation between anchor points
+        // Find closest triangle and interpolate
+        
+        let triangles: [(SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)] = [
+            // (live1, live2, live3, tex1, tex2, tex3)
+            // Forehead triangle
+            (liveAnchors.forehead, liveAnchors.leftEye, liveAnchors.rightEye,
+             textureAnchors.forehead, textureAnchors.leftEye, textureAnchors.rightEye),
+            // Left eye to nose
+            (liveAnchors.leftEye, liveAnchors.noseTip, liveAnchors.forehead,
+             textureAnchors.leftEye, textureAnchors.noseTip, textureAnchors.forehead),
+            // Right eye to nose
+            (liveAnchors.rightEye, liveAnchors.forehead, liveAnchors.noseTip,
+             textureAnchors.rightEye, textureAnchors.forehead, textureAnchors.noseTip),
+            // Left cheek
+            (liveAnchors.leftEye, liveAnchors.leftCheek, liveAnchors.noseTip,
+             textureAnchors.leftEye, textureAnchors.leftCheek, textureAnchors.noseTip),
+            // Right cheek
+            (liveAnchors.rightEye, liveAnchors.noseTip, liveAnchors.rightCheek,
+             textureAnchors.rightEye, textureAnchors.noseTip, textureAnchors.rightCheek),
+            // Nose to mouth
+            (liveAnchors.noseTip, liveAnchors.leftMouth, liveAnchors.rightMouth,
+             textureAnchors.noseTip, textureAnchors.leftMouth, textureAnchors.rightMouth),
+            // Left mouth to cheek
+            (liveAnchors.leftCheek, liveAnchors.leftMouth, liveAnchors.noseTip,
+             textureAnchors.leftCheek, textureAnchors.leftMouth, textureAnchors.noseTip),
+            // Right mouth to cheek
+            (liveAnchors.rightCheek, liveAnchors.noseTip, liveAnchors.rightMouth,
+             textureAnchors.rightCheek, textureAnchors.noseTip, textureAnchors.rightMouth),
+            // Left chin
+            (liveAnchors.leftCheek, liveAnchors.chin, liveAnchors.leftMouth,
+             textureAnchors.leftCheek, textureAnchors.chin, textureAnchors.leftMouth),
+            // Right chin
+            (liveAnchors.rightCheek, liveAnchors.rightMouth, liveAnchors.chin,
+             textureAnchors.rightCheek, textureAnchors.rightMouth, textureAnchors.chin),
+            // Center chin
+            (liveAnchors.leftMouth, liveAnchors.chin, liveAnchors.rightMouth,
+             textureAnchors.leftMouth, textureAnchors.chin, textureAnchors.rightMouth),
+        ]
+        
+        // Find triangle containing the point and interpolate
+        for (l1, l2, l3, t1, t2, t3) in triangles {
+            if let bary = barycentricCoords(point: point, v1: l1, v2: l2, v3: l3) {
+                // Point is inside this triangle - interpolate texture coordinates
+                let textureUV = t1 * bary.x + t2 * bary.y + t3 * bary.z
+                return SIMD2<Float>(
+                    max(0, min(1, textureUV.x)),
+                    max(0, min(1, textureUV.y))
+                )
+            }
+        }
+        
+        // Fallback: simple linear mapping if point is outside all triangles
+        let mappedPoint = textureCenter + relativePoint * textureSize
+        return SIMD2<Float>(
+            max(0, min(1, mappedPoint.x)),
+            max(0, min(1, mappedPoint.y))
+        )
+    }
+    
+    /// Calculate barycentric coordinates of point in triangle
+    /// Returns nil if point is outside triangle
+    private func barycentricCoords(point: SIMD2<Float>, v1: SIMD2<Float>, v2: SIMD2<Float>, v3: SIMD2<Float>) -> SIMD3<Float>? {
+        let v0 = v3 - v1
+        let v1v = v2 - v1
+        let v2v = point - v1
+        
+        let dot00 = simd_dot(v0, v0)
+        let dot01 = simd_dot(v0, v1v)
+        let dot02 = simd_dot(v0, v2v)
+        let dot11 = simd_dot(v1v, v1v)
+        let dot12 = simd_dot(v1v, v2v)
+        
+        let invDenom = 1.0 / (dot00 * dot11 - dot01 * dot01)
+        let u = (dot11 * dot02 - dot01 * dot12) * invDenom
+        let v = (dot00 * dot12 - dot01 * dot02) * invDenom
+        let w = 1.0 - u - v
+        
+        // Check if point is in triangle (with small tolerance for edge cases)
+        let tolerance: Float = 0.1
+        if u >= -tolerance && v >= -tolerance && w >= -tolerance {
+            return SIMD3<Float>(w, v, u)
+        }
+        return nil
     }
     
     /// Extract face mesh from tracking result
